@@ -1,3 +1,6 @@
+
+extern crate freetype as ft;
+
 use layout::{AnonymousBlock, BlockNode, InlineNode, LayoutBox, Rect};
 use css::{Value, Color};
 
@@ -7,13 +10,23 @@ pub struct Canvas {
     pub height: usize,
 }
 
+const TEST_FONT: &'static str = "../freetype-rs/examples/assets/FiraSans-Regular.ttf";
+const WIDTH: usize = 128;
+const HEIGHT: usize = 64;
+
 /// Paint a tree of LayoutBoxes to an array of pixels.
 pub fn paint(layout_root: &LayoutBox, bounds: Rect) -> Canvas {
+    // initialize freetype:
+    let library = ft::Library::init().unwrap();
+    let face = library.new_face(TEST_FONT, 0).unwrap();
+
+
     let display_list = build_display_list(layout_root);
     let mut canvas = Canvas::new(bounds.width as usize, bounds.height as usize);
     for item in display_list {
         canvas.paint_item(&item);
     }
+    canvas.paint_character(&face, 'A');
     return canvas;
 }
 
@@ -96,6 +109,59 @@ fn get_color(layout_box: &LayoutBox, name: &str) -> Option<Color> {
     }
 }
 
+/**
+ * compose two pixels, with alpha blending
+ *
+ * Based on "Image Compositing Fundamentals" by Alvy Ray Smith,
+ * http://alvyray.com/Memos/CG/Microsoft/4_comp.pdf
+ *
+ */
+
+// approximation of multiplying a and b if we interpret each quantity as a representation
+// of a real number on interval [0.0, 1.0]
+fn int_mult(a: u8, b: u8) -> u8 {
+    let t : u32 = a as u32 * b as u32;
+    let ret = ((t >> 8) + t) >> 8;
+    ret as u8
+}
+fn int_lerp(p: u8, q: u8, a: u8) -> u8 {
+    let ret = p + int_mult(a,q - p);
+    ret
+}
+fn int_pre_lerp(p: u8, q:u8, a: u8) -> u8 {
+    let ret = p + q + int_mult(a,p);
+    ret
+}
+
+// over for single channel:
+fn over_channel(a: u8,alpha: u8,b: u8,beta: u8) -> u8 {
+    let cPrime = int_lerp(int_mult(a,alpha),b,beta);
+    cPrime
+}
+
+// simple but somewhat inefficient over for a single channel:
+fn over_channel_simple(a: u8,alpha: u8,b: u8,beta: u8) -> u8 {
+    // If we interpret all args as 8 bit representation of floating point values between 0 and 1:
+    // res = beta * b + (1 - beta) * alpha * a
+    //     = beta * b + alpha - alpha * beta
+    // (Note: The above equations are based on the floating point interpretation)
+    let c_prime = int_mult(beta,b) + alpha - int_mult(int_mult(alpha,beta),a);
+    c_prime
+}
+
+fn over(a: Color, b: Color) -> Color {
+    let red = over_channel_simple(a.r,a.a,b.r,b.a);
+    let green = over_channel_simple(a.g,a.a,b.g,b.a);
+    let blue = over_channel_simple(a.b,a.a,b.b,b.a);
+    // from simple formulation in paper:
+    // beta + alpha - alpha * beta
+    // let cAlpha = b.a as u32 + a.a as u32 - int_mult(b.a,a.a) as u32;
+    let c_alpha = 255;
+    let ret = Color { r: red, g: green, b: blue, a: c_alpha as u8 };
+    ret
+}
+
+
 impl Canvas {
     /// Create a blank canvas
     fn new(width: usize, height: usize) -> Canvas {
@@ -124,6 +190,44 @@ impl Canvas {
                 }
             }
         }
+    }
+
+
+    // render a ft::Bitmap on to Canvas
+    // adapted from draw_bitmap in single_glyph example in freetype-rs
+    fn paint_bitmap(&mut self, color: Color, bitmap: ft::Bitmap, x: usize, y: usize) {
+        let mut p = 0;
+        let mut q = 0;
+        let w = bitmap.width() as usize;
+        let x_max = x + w;
+        let y_max = y + bitmap.rows() as usize;
+
+        println!("w: {}, x_max: {}, rows: {}, y_max: {}", w, x_max, bitmap.rows(), y_max );
+        println!("iterating: x: {}, x_max: {}, y: {}, y_max: {}", x, x_max, y, y_max );
+        for i in x .. x_max {
+            for j in y .. y_max {
+                if i < WIDTH && j < HEIGHT {
+                    let under = self.pixels[j * self.width + i];    // current pixel
+                    let level = bitmap.buffer()[q * w + p];
+                    self.pixels[j * self.width + i] = over(under,Color { a: level, .. color });
+                    q += 1;
+                }
+            }
+            q = 0;
+            p += 1;
+        }
+    }
+
+    fn paint_character(&mut self, face: &ft::Face, ch: char) {
+        face.set_char_size(40 * 64, 0, 110, 0).unwrap();
+        face.load_char(ch as usize, ft::face::RENDER).unwrap();
+
+        let glyph = face.glyph();
+        println!("glyph: bitmap_left: {}, bitmap_top: {}", glyph.bitmap_left(),glyph.bitmap_top());
+        let x = glyph.bitmap_left() as usize;
+        let y = HEIGHT - glyph.bitmap_top() as usize;
+        let pen = Color { r: 0, g: 0, b: 0, a: 255 };
+        self.paint_bitmap(pen, glyph.bitmap(), x, y);
     }
 }
 

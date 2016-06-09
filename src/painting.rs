@@ -3,6 +3,7 @@ extern crate freetype as ft;
 
 use layout::{AnonymousBlock, BlockNode, InlineNode, LayoutBox, Rect};
 use css::{Value, Color};
+use std::cmp;
 
 pub struct Canvas {
     pub pixels: Vec<Color>,
@@ -11,8 +12,6 @@ pub struct Canvas {
 }
 
 const TEST_FONT: &'static str = "../freetype-rs/examples/assets/FiraSans-Regular.ttf";
-const WIDTH: usize = 128;
-const HEIGHT: usize = 64;
 
 /// Paint a tree of LayoutBoxes to an array of pixels.
 pub fn paint(layout_root: &LayoutBox, bounds: Rect) -> Canvas {
@@ -124,19 +123,24 @@ fn int_mult(a: u8, b: u8) -> u8 {
     let ret = ((t >> 8) + t) >> 8;
     ret as u8
 }
+
+#[allow(dead_code)]
 fn int_lerp(p: u8, q: u8, a: u8) -> u8 {
     let ret = p + int_mult(a,q - p);
     ret
 }
+
+#[allow(dead_code)]
 fn int_pre_lerp(p: u8, q:u8, a: u8) -> u8 {
     let ret = p + q + int_mult(a,p);
     ret
 }
 
 // over for single channel:
+#[allow(dead_code)]
 fn over_channel(a: u8,alpha: u8,b: u8,beta: u8) -> u8 {
-    let cPrime = int_lerp(int_mult(a,alpha),b,beta);
-    cPrime
+    let c_prime = int_lerp(int_mult(a,alpha),b,beta);
+    c_prime
 }
 
 // simple but somewhat inefficient over for a single channel:
@@ -195,7 +199,7 @@ impl Canvas {
 
     // render a ft::Bitmap on to Canvas
     // adapted from draw_bitmap in single_glyph example in freetype-rs
-    fn paint_bitmap(&mut self, color: Color, bitmap: ft::Bitmap, x: usize, y: usize) {
+    fn paint_ft_bitmap(&mut self, color: Color, bitmap: ft::Bitmap, x: usize, y: usize) {
         let mut p = 0;
         let mut q = 0;
         let w = bitmap.width() as usize;
@@ -204,14 +208,12 @@ impl Canvas {
 
         println!("w: {}, x_max: {}, rows: {}, y_max: {}", w, x_max, bitmap.rows(), y_max );
         println!("iterating: x: {}, x_max: {}, y: {}, y_max: {}", x, x_max, y, y_max );
-        for i in x .. x_max {
-            for j in y .. y_max {
-                if i < WIDTH && j < HEIGHT {
-                    let under = self.pixels[j * self.width + i];    // current pixel
-                    let level = bitmap.buffer()[q * w + p];
-                    self.pixels[j * self.width + i] = over(under,Color { a: level, .. color });
-                    q += 1;
-                }
+        for i in x .. oclamp(0,self.width-1,x_max) {
+            for j in y .. oclamp(0,self.height-1,y_max) {
+                let under = self.pixels[j * self.width + i];    // current pixel
+                let level = bitmap.buffer()[q * w + p];
+                self.pixels[j * self.width + i] = over(under,Color { a: level, .. color });
+                q += 1;
             }
             q = 0;
             p += 1;
@@ -225,9 +227,9 @@ impl Canvas {
         let glyph = face.glyph();
         println!("glyph: bitmap_left: {}, bitmap_top: {}", glyph.bitmap_left(),glyph.bitmap_top());
         let x = glyph.bitmap_left() as usize;
-        let y = HEIGHT - glyph.bitmap_top() as usize;
+        let y = 0 as usize;
         let pen = Color { r: 0, g: 0, b: 0, a: 255 };
-        self.paint_bitmap(pen, glyph.bitmap(), x, y);
+        self.paint_ft_bitmap(pen, glyph.bitmap(), x, y);
     }
 }
 
@@ -239,3 +241,19 @@ impl Clamp for f32 {
         self.max(lower).min(upper)
     }
 }
+
+/*
+ * A generic three-argument version of clamp for any value in Ord.
+ */
+fn oclamp<T: Ord>(lower: T, upper: T, val: T) -> T {
+    cmp::min(cmp::max(val,lower),upper)
+}
+
+/*
+ An attempt to define a generic OClamp trait for all <T>: Ord so we can use method syntax:
+ Unfortunately, can't work out how to implement; the obvious way (giving a default impl in the trait)
+ yields a bunch of inscrutable type errors
+trait OClamp: Ord {
+    fn oclamp(self, lower: Self, upper: Self) -> Self;
+}
+*/

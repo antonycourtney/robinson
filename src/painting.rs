@@ -25,7 +25,7 @@ pub fn paint(layout_root: &LayoutBox, bounds: Rect) -> Canvas {
     for item in display_list {
         canvas.paint_item(&item);
     }
-    canvas.paint_character(&face, 'A');
+    canvas.paint_str(&face, 120, 200, "Lorem Ipsum Lorem Ipsum.");
     return canvas;
 }
 
@@ -147,9 +147,9 @@ fn over_channel(a: u8,alpha: u8,b: u8,beta: u8) -> u8 {
 fn over_channel_simple(a: u8,alpha: u8,b: u8,beta: u8) -> u8 {
     // If we interpret all args as 8 bit representation of floating point values between 0 and 1:
     // res = beta * b + (1 - beta) * alpha * a
-    //     = beta * b + alpha - alpha * beta
+    //     = beta * b + alpha * a - alpha * beta * a
     // (Note: The above equations are based on the floating point interpretation)
-    let c_prime = int_mult(beta,b) + alpha - int_mult(int_mult(alpha,beta),a);
+    let c_prime = int_mult(beta,b) + int_mult(alpha,a) - int_mult(int_mult(alpha,beta),a);
     c_prime
 }
 
@@ -159,7 +159,7 @@ fn over(a: Color, b: Color) -> Color {
     let blue = over_channel_simple(a.b,a.a,b.b,b.a);
     // from simple formulation in paper:
     // beta + alpha - alpha * beta
-    // let cAlpha = b.a as u32 + a.a as u32 - int_mult(b.a,a.a) as u32;
+    // let c_alpha = b.a as u32 + a.a as u32 - int_mult(b.a,a.a) as u32;
     let c_alpha = 255;
     let ret = Color { r: red, g: green, b: blue, a: c_alpha as u8 };
     ret
@@ -220,17 +220,55 @@ impl Canvas {
         }
     }
 
-    fn paint_character(&mut self, face: &ft::Face, ch: char) {
-        face.set_char_size(40 * 64, 0, 110, 0).unwrap();
-        face.load_char(ch as usize, ft::face::RENDER).unwrap();
+    fn paint_str(&mut self, face: &ft::Face, x: i64, y: i64, s: &str) {
+        let mut transform = ft::Matrix { xx: 0x10000, xy: 0, yx: 0, yy: 0x10000 };  // identity
+        let mut pos = ft::Vector { x: x * 64, y: y * 64 };
 
+        face.set_char_size(24 * 64, 0, 120, 0).unwrap();            // 40pt at 110 dpi
+
+        for ch in s.chars() {
+            face.set_transform( &mut transform, &mut pos );
+            face.load_char(ch as usize, ft::face::RENDER).unwrap();
+            let glyph_slot = face.glyph();
+            let bitmap = glyph_slot.bitmap();
+            // dump_ft_bitmap(bitmap);
+            println!("glyph: bitmap_left: {}, bitmap_top: {}", glyph_slot.bitmap_left(),glyph_slot.bitmap_top());
+            let gx = glyph_slot.bitmap_left() as usize;
+            let gy = (y - (glyph_slot.bitmap_top() as i64 - y)) as usize;
+            let pen = Color { r: 0, g: 0, b: 0, a: 255 };
+            self.paint_ft_bitmap(pen, bitmap, gx, gy);
+
+            let adv = glyph_slot.advance();
+            let gm = glyph_slot.metrics();
+            println!("glyph metrics: height: {}, horiBearingY: {}", gm.height, gm.horiBearingY );
+            println!("advance: {}, {}", adv.x, adv.y);
+            println!("before advance: {}, {}", pos.x, pos.y);
+            pos.x += adv.x;
+            pos.y += adv.y;
+            println!("after advance: {}, {}", pos.x, pos.y);
+        }
+    }
+
+
+    // paint a string, advancing the position after each character:
+/*
+    fn paint_str(&mut self, face: &ft::Face, s: &str) {
+
+        face.set_char_size(64 * 64, 0, 110, 0).unwrap();            // 40pt at 110 dpi
+
+        face.load_char(ch as usize, ft::face::RENDER).unwrap();
         let glyph = face.glyph();
+        let bitmap = glyph.bitmap();
+        // dump_ft_bitmap(bitmap);
         println!("glyph: bitmap_left: {}, bitmap_top: {}", glyph.bitmap_left(),glyph.bitmap_top());
         let x = glyph.bitmap_left() as usize;
-        let y = 0 as usize;
+        let y = (glyph.bitmap_top() - bitmap.rows()) as usize;
         let pen = Color { r: 0, g: 0, b: 0, a: 255 };
-        self.paint_ft_bitmap(pen, glyph.bitmap(), x, y);
+        self.paint_ft_bitmap(pen, bitmap, x, y);
     }
+*/
+
+
 }
 
 trait Clamp {
